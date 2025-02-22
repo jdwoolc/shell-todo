@@ -129,7 +129,7 @@ function todo_update_mark {
 
 function todo_switch() {
 	if [ -z $1 ]; then
-      env ls -CF1 $tododir | sed "s/$switch/($switch)/"
+      env ls -CF1 $tododir | sed "s/$switch/\* $switch/"
 	else
       sed -i "1s/.*./$1/" $todoconfig
 	fi
