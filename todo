@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# This file can be sourced or executed.
+# More information below at the "Execution" section
+
+# source ~/.bashrc.colors
+
+TFS='|'                 # TODO Field Separator
+mark_completed='✓'      # Completed elements
+mark_todo=' '           # Open elements
+tododir=${SHELL_TODO_DIR:-${HOME}/.config/shell-todo}
+todoconfig=$tododir/.config
+switch=$(sed "1q;d" $todoconfig)
+conf=$tododir/$switch
+
+# Todo Function
+function todo_help() {
+			cat << EOF
+Usage:  todo COMMAND [OPTIONS]...
+
+A simple command line TODO list manager
+
+Commands
+	help        This help message.
+	add	        Remove an item by INDEX number. 
+	mark N      Add an item by ITEM.
+	unmark N    No error messages.
+	remove N
+
+@EXAMPLES:
+	todo 		
+		List all items in todo list.
+	todo 1
+		List 1st ITEM in todo list. 
+	todo -a "Something to do"
+		Add a todo item.
+	todo -r 1
+		Remove item at index #1.
+EOF
+}
+
+function todo_add() {
+  due="n/a"
+  priority="normal"
+  message=" "
+  status="[ ]"
+  now=$(date +%F+%T)
+
+  while [[ ! -z $1 ]]; do
+    opt=$1
+	arg=$2
+    case ${opt} in
+	  -d|--due)
+	    shift 2
+	    due=$arg
+		;;
+	  -m|--message)
+	    shift 2
+	    message=$arg
+		;;
+	  -p|--priority)
+	    shift 2
+	    priority=$arg
+		;;
+	esac
+  done
+  if [ -n "$message" ]; then
+    echo "$now$TFS$priority$TFS$due$TFS$status$TFS$message" >> "${conf}"
+	if [[ $? -eq 0 ]]; then
+	  echo -e "${GREEN}Info:${NOCOL} wrote to ${conf}"
+	  todo_show | tail -n 1
+	fi
+  fi
+}
+
+function todo_show() {
+  local verbose=0
+  local lineno=""
+  while [[ ! -z $1 ]]; do
+    opt=$1
+	arg=$2
+    case ${opt} in
+	  #+([0-9])) line=$1; shift 1; verbose=1; echo $line;; # maybe with shopt -s extglob
+	  -v|--verbose) shift 1; verbose=1;;
+	  *)  
+        # Check if the input is a valid integer
+        if [[ "$1" =~ ^-?[0-9]+$ ]]; then
+          lineno="NR==$1"
+		  verbose=1
+		  shift 1
+        else	  
+	      echo "error: unknown argument "$1
+		  exit 1
+		fi;;
+	esac
+  done
+
+  if [ $verbose -eq 1 ]; then
+    fmt='{print NR ":", $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }'
+  else
+    fmt='{print NR ":", $4 " " $5}'
+  fi
+  
+  fmt="$lineno $fmt"
+  awk -F"$TFS" "$fmt" ${conf}
+}
+
+function todo_update_mark {
+	lineno=$1
+
+	# update lineno with status mark
+	line=$(sed "${lineno}q;d" ${conf})
+	IFS="$TFS" read -a parts <<< $line
+	parts[3]=$status_mark
+
+	# build replacement result
+	result=""
+    for p in "${parts[@]}"; do
+      if [ -z "$result" ]; then
+        result="$p"
+      else
+        result="$result$TFS$p"
+      fi
+	done
+    
+	# This sed expression has had trouble, using '!' for separator for now
+	sed -i "${lineno}s!.*!${result}!" "${conf}"
+	todo_show | grep "${lineno}:"
+}
+
+function todo_switch() {
+	if [ -z $1 ]; then
+      env ls -CF1 $tododir | sed "s/$switch/($switch)/"
+	else
+      sed -i "1s/.*./$1/" $todoconfig
+	fi
+}
+
+function todo() {
+	local iterVal mode array
+	# Check to see if $conf exists and create an empty one if not
+	[[ -f "${conf}" ]] || cat /dev/null > "${conf}"
+
+	# Remove whitespace from the ends of lines and empty lines
+	sed -i '/^\s*$/d' "${conf}"
+	sed -i '/^$/d' "${conf}"
+
+    # Parse the arguments
+    case $1 in
+		help)	 
+		  todo_help
+		  exit 0
+		  ;;
+		remove)
+		  if [ $2 -gt 0 ]; then
+		    sed -i -e "${2}d" "${conf}"
+		  fi
+		  ;;
+		add) shift; todo_add "$@";;
+        mark)
+		  status_mark="[✓]"
+		  shift
+		  todo_update_mark $@
+          ;;
+        unmark) status_mark="[ ]"; shift; todo_update_mark $@;;
+		switch) shift; todo_switch $@;;	
+		show) shift; todo_show $@;;
+	esac
+
+    return
+
+	if [[ "${mode}" =~ ^[0-5]$ ]]; then
+		if [[ "${mode}" -eq 0 ]]; then
+          echo "gooba"
+		elif [[ "${mode}" -eq 1 ]]; then
+			
+			return
+		elif [[ "${mode}" -eq 2 ]]; then
+			echo "$2" >> "${conf}"
+			return
+		elif [[ "${mode}" -eq 3 ]]; then
+			readarray -t array < "${conf}"
+			echo "${array[$((${1} - 1))]}"
+			return
+		else
+			readarray -t array < "${conf}"
+			if [[ ${#array[@]} -eq 0 ]]; then
+				[[ ${mode} -ne 4 ]] &&
+				echo "No items in the TODO list."
+				return
+			fi
+			for iterVal in "${!array[@]}"; do
+				echo "[$((${iterVal} + 1))]:${array[${iterVal}]}"
+			done
+			return
+		fi
+	fi
+}
+
+$(return >/dev/null 2>&1)
+if [ "$?" -eq "0" ]; then
+	complete -W 'add help remove update mark unmark clean' todo
+else
+	todo "$@"
+fi
