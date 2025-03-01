@@ -2,7 +2,7 @@
 # This file can be sourced or executed.
 # More information below at the "Execution" section
 
-# source ~/.bashrc.colors
+source ~/.bashrc.colors
 
 TFS='|'                 # TODO Field Separator
 mark_completed='✓'      # Completed elements
@@ -14,27 +14,43 @@ conf=$tododir/$switch
 
 # Todo Function
 function todo_help() {
-			cat << EOF
-Usage:  todo COMMAND [OPTIONS]...
+cat << EOF
+Usage:  todo COMMAND [OPTIONS]
 
 A simple command line TODO list manager
 
-Commands
+Commands:
 	help        This help message.
 	add	        Remove an item by INDEX number. 
 	mark N      Add an item by ITEM.
 	unmark N    No error messages.
 	remove N
 
-@EXAMPLES:
-	todo 		
+Examples:
+	todo show 		
 		List all items in todo list.
-	todo 1
-		List 1st ITEM in todo list. 
-	todo -a "Something to do"
+	todo show 1
+		List 1st entry in todo list. 
+	todo add -m "Something to do"
 		Add a todo item.
-	todo -r 1
-		Remove item at index #1.
+	todo remove 1
+		Remove item at index #1
+	todo switch <NAME>
+	    Switch to <NAME>
+EOF
+}
+
+function todo_add_help() {
+cat << EOF
+Usage:  todo add [OPTIONS]
+
+Add a message to the currently selected todo list.
+
+OPTIONS
+  -m MESSAGE       Required. The todo message to store.
+  -d DATE          Due date
+  -p PRIORITY      Priority [0-9] or "low", "normal", "medium", "high"
+
 EOF
 }
 
@@ -61,12 +77,24 @@ function todo_add() {
 	    shift 2
 	    priority=$arg
 		;;
+	   *) todo_add_help; exit 1;;
 	esac
   done
-  if [ -n "$message" ]; then
+
+  # Normalize due date and test
+  normalized_due=$(date -d ${due} +%F+%T)
+  if [[ $? != 0 ]]; then
+    echo -e "${RED}error:${NOCOLOR} invalid due date"
+	exit 1
+  fi
+
+  # Normalize priority statement
+
+  # Test validity of message and store
+  if [[ ${message} != " " ]]; then
     echo "$now$TFS$priority$TFS$due$TFS$status$TFS$message" >> "${conf}"
 	if [[ $? -eq 0 ]]; then
-	  echo -e "${GREEN}Info:${NOCOL} wrote to ${conf}"
+	  echo -e "${GREEN}Info:${NOCOL} wrote to ${YELLOW}${switch}${NOCOLOR}"
 	  todo_show | tail -n 1
 	fi
   fi
@@ -94,6 +122,8 @@ function todo_show() {
 	esac
   done
 
+
+  echo -e "${YELLOW}File:${NOCOLOR} $switch"
   if [ $verbose -eq 1 ]; then
     fmt='{print NR ":", $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }'
   else
@@ -129,14 +159,17 @@ function todo_update_mark {
 
 function todo_switch() {
 	if [ -z $1 ]; then
-      env ls -CF1 $tododir | sed "s/$switch/\* $switch/"
+	  for f in "$tododir"/*; do
+	    entries=$(wc -l $f | awk '{print $1}')
+		f=$(basename $f)
+		echo "$f $entries"
+	  done
 	else
       sed -i "1s/.*./$1/" $todoconfig
 	fi
 }
 
 function todo() {
-	local iterVal mode array
 	# Check to see if $conf exists and create an empty one if not
 	[[ -f "${conf}" ]] || cat /dev/null > "${conf}"
 
@@ -146,54 +179,19 @@ function todo() {
 
     # Parse the arguments
     case $1 in
-		help)	 
-		  todo_help
-		  exit 0
-		  ;;
+		help|--help) todo_help;;
 		remove)
 		  if [ $2 -gt 0 ]; then
 		    sed -i -e "${2}d" "${conf}"
 		  fi
-		  ;;
-		add) shift; todo_add "$@";;
-        mark)
-		  status_mark="[✓]"
-		  shift
-		  todo_update_mark $@
           ;;
+		   add) shift; todo_add "$@";;
+          mark) status_mark="[✓]"; shift; todo_update_mark $@;;
         unmark) status_mark="[ ]"; shift; todo_update_mark $@;;
 		switch) shift; todo_switch $@;;	
-		show) shift; todo_show $@;;
+		  show) shift; todo_show $@;;
+		     *) todo_help;;
 	esac
-
-    return
-
-	if [[ "${mode}" =~ ^[0-5]$ ]]; then
-		if [[ "${mode}" -eq 0 ]]; then
-          echo "gooba"
-		elif [[ "${mode}" -eq 1 ]]; then
-			
-			return
-		elif [[ "${mode}" -eq 2 ]]; then
-			echo "$2" >> "${conf}"
-			return
-		elif [[ "${mode}" -eq 3 ]]; then
-			readarray -t array < "${conf}"
-			echo "${array[$((${1} - 1))]}"
-			return
-		else
-			readarray -t array < "${conf}"
-			if [[ ${#array[@]} -eq 0 ]]; then
-				[[ ${mode} -ne 4 ]] &&
-				echo "No items in the TODO list."
-				return
-			fi
-			for iterVal in "${!array[@]}"; do
-				echo "[$((${iterVal} + 1))]:${array[${iterVal}]}"
-			done
-			return
-		fi
-	fi
 }
 
 $(return >/dev/null 2>&1)
