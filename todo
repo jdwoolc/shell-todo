@@ -4,13 +4,22 @@
 
 source ~/.bashrc.colors
 
+# Configurable default values
 TFS='|'                 # TODO Field Separator
-mark_completed='✓'      # Completed elements
-mark_todo=' '           # Open elements
-tododir=${SHELL_TODO_DIR:-${HOME}/.config/shell-todo}
-todoconfig=$tododir/.config
-switch=$(sed "1q;d" $todoconfig)
-conf=$tododir/$switch
+mark_completed='[✓]'    # Completed elements
+mark_unstarted='[ ]'    # Open elements
+date_fmt="+%FT%T"       # Date format
+config_name=".config"
+
+# Derived script variables
+todo_dir=${SHELL_TODO_DIR:-${HOME}/.config/shell-todo}
+todo_config=${todo_dir}/${config_name}
+switch=$(sed "1q;d" ${todo_config}) # Top line stores current list name
+if [[ ${switch} == ${config_name} ]]; then
+  echo -e "${RED}error:${NOCOLOR} invalid todo list name detected. Check ${todo_config}"
+  exit 1
+fi
+conf=$todo_dir/$switch
 
 # Todo Function
 function todo_help() {
@@ -36,7 +45,8 @@ Examples:
 	todo remove 1
 		Remove item at index #1
 	todo switch <NAME>
-	    Switch to <NAME>
+	    Switch to or create list <NAME>
+
 EOF
 }
 
@@ -46,25 +56,35 @@ Usage:  todo add [OPTIONS]
 
 Add a message to the currently selected todo list.
 
+The current time is recorded with the message. Optional fields include
+the due date, priority, and expected time to complete.
+
 OPTIONS
   -m MESSAGE       Required. The todo message to store.
   -d DATE          Due date
-  -p PRIORITY      Priority [0-9] or "low", "normal", "medium", "high"
+  -p PRIORITY      Priority [0-9|low|normal|medium|high]
+  -e ESTIMATE      Estimated time to complete task
 
 EOF
 }
 
 function todo_add() {
   due="n/a"
+  estimate="n/a"
   priority="normal"
   message=" "
-  status="[ ]"
-  now=$(date +%F+%T)
+  status=${mark_unstarted}
+  now=$(date ${date_fmt})
 
   while [[ ! -z $1 ]]; do
     opt=$1
 	arg=$2
+	echo "opt $1, arg $2"
     case ${opt} in
+	  -e|--estimate)
+	    shift 2
+		estimate=$arg
+		;;
 	  -d|--due)
 	    shift 2
 	    due=$arg
@@ -82,17 +102,21 @@ function todo_add() {
   done
 
   # Normalize due date and test
-  normalized_due=$(date -d ${due} +%F+%T)
-  if [[ $? != 0 ]]; then
-    echo -e "${RED}error:${NOCOLOR} invalid due date"
-	exit 1
+  if [[ "${due}" == "n/a" ]]; then
+    normalized_due="n/a"
+  else
+    normalized_due=$(date -d ${due} ${date_fmt})
+    if [[ $? != 0 ]]; then
+      echo -e "${RED}error:${NOCOLOR} invalid due date"
+	  exit 1
+    fi
   fi
 
   # Normalize priority statement
 
   # Test validity of message and store
   if [[ ${message} != " " ]]; then
-    echo "$now$TFS$priority$TFS$due$TFS$status$TFS$message" >> "${conf}"
+    echo "$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message" >> "${conf}"
 	if [[ $? -eq 0 ]]; then
 	  echo -e "${GREEN}Info:${NOCOL} wrote to ${YELLOW}${switch}${NOCOLOR}"
 	  todo_show | tail -n 1
@@ -106,6 +130,7 @@ function todo_show() {
   while [[ ! -z $1 ]]; do
     opt=$1
 	arg=$2
+
     case ${opt} in
 	  #+([0-9])) line=$1; shift 1; verbose=1; echo $line;; # maybe with shopt -s extglob
 	  -v|--verbose) shift 1; verbose=1;;
@@ -125,22 +150,26 @@ function todo_show() {
 
   echo -e "${YELLOW}File:${NOCOLOR} $switch"
   if [ $verbose -eq 1 ]; then
-    fmt='{print NR ":", $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }'
+    fmt='$5 == "[ ]" {print NR ":", $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }
+	     $5 == "[✓]" {print NR ":", "\033[38;5;0m" $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 "\033[0m" }'
   else
-    fmt='{print NR ":", $4 " " $5}'
+    fmt='$5 == "[ ]"  {print NR ":", $4 " " $5}
+	     $5 == "[✓]" {print NR ":", "\033[38;5;0m" $4 " " $5 "\033[0m"}'
   fi
   
   fmt="$lineno $fmt"
   awk -F"$TFS" "$fmt" ${conf}
 }
 
+# todo_update_mark
+# Update the status of the entry in place
 function todo_update_mark {
 	lineno=$1
 
 	# update lineno with status mark
 	line=$(sed "${lineno}q;d" ${conf})
 	IFS="$TFS" read -a parts <<< $line
-	parts[3]=$status_mark
+	parts[4]=$status_mark
 
 	# build replacement result
 	result=""
@@ -157,19 +186,40 @@ function todo_update_mark {
 	todo_show | grep "${lineno}:"
 }
 
+# todo_switch
+# With parameter, switch to (and create) indicated todo list
+# Without parameter, list all options and indicate current list
 function todo_switch() {
 	if [ -z $1 ]; then
-	  for f in "$tododir"/*; do
-	    entries=$(wc -l $f | awk '{print $1}')
+	  for f in "$todo_dir"/*; do
+	    completed=$(grep -e "${mark_completed}" $f | wc -l | awk '{print $1}')
+		unstarted=$(grep -e "${mark_unstarted}" $f | wc -l | awk '{print $1}')
+	    #entries=$(wc -l $f | awk '{print $1}')
+		entries="[${completed}/${unstarted}]"
 		f=$(basename $f)
 		echo "$f $entries"
 	  done
 	else
-      sed -i "1s/.*./$1/" $todoconfig
+	  touch ${todo_dir}/$1
+      sed -i "1s/.*./$1/" ${todo_config}
 	fi
 }
 
+# todo_remove
+# Remove an entry from currently configured todo list
+function todo_remove() {
+	num_lines=$(wc -l ${conf} | awk '{print $1}')
+	if (( $1 > 0 && $1 <= num_lines )); then
+	  sed -i -e "${1}d" "${conf}"
+	else
+	  echo -e "${RED}error:${NOCOLOR} index out of bounds"
+	  exit 1
+    fi
+}
+
+# "main" routine - branch on primary command argument
 function todo() {
+
 	# Check to see if $conf exists and create an empty one if not
 	[[ -f "${conf}" ]] || cat /dev/null > "${conf}"
 
@@ -180,23 +230,20 @@ function todo() {
     # Parse the arguments
     case $1 in
 		help|--help) todo_help;;
-		remove)
-		  if [ $2 -gt 0 ]; then
-		    sed -i -e "${2}d" "${conf}"
-		  fi
-          ;;
+		remove) shift; todo_remove $@;;
 		   add) shift; todo_add "$@";;
-          mark) status_mark="[✓]"; shift; todo_update_mark $@;;
-        unmark) status_mark="[ ]"; shift; todo_update_mark $@;;
+          mark) shift; status_mark=${mark_completed}; todo_update_mark $@;;
+        unmark) shift; status_mark=${mark_unstarted}; todo_update_mark $@;;
 		switch) shift; todo_switch $@;;	
 		  show) shift; todo_show $@;;
 		     *) todo_help;;
 	esac
 }
 
-$(return >/dev/null 2>&1)
+# Entry point -- provide autocomplete when sourced or enter "main"
+$(return >/dev/null 2>&1) # TODO: DANGER! This is not stable
 if [ "$?" -eq "0" ]; then
 	complete -W 'add help remove update mark unmark clean' todo
 else
-	todo "$@"
+	todo "$@" # Call the todo function
 fi
