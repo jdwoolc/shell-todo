@@ -29,7 +29,11 @@ fi
 todo_file=$todo_dir/$switch
 now=$(date ${date_fmt})
 
-# Todo Function
+
+##
+# help functions
+#
+
 function todo_help() {
 cat << EOF
 Usage:  todo COMMAND [OPTIONS]
@@ -38,20 +42,19 @@ A simple command line TODO list manager
 
 Commands:
 	help        This help message.
-	add	        Remove an item by INDEX number. 
+	add	        Remove an item by INDEX number.
+	update N    Update the Nth entry
 	mark N      Add an item by ITEM.
 	unmark N    No error messages.
 	remove N
 
 Examples:
-	todo show 		
-		List all items in todo list.
-	todo show 1
-		List 1st entry in todo list. 
 	todo add -m "Something to do"
-		Add a todo item.
+		Add a todo item
+	todo show 		
+		List all items in todo list 
 	todo remove 1
-		Remove item at index #1
+		Remove item at index 1
 	todo switch <NAME>
 	    Switch to or create list <NAME>
 
@@ -76,53 +79,27 @@ OPTIONS
 EOF
 }
 
-function todo_update() {
- lineno=$1
- shift 1
- 
- if [[ ! "$lineno" =~ ^-?[0-9]+$ ]]; then
-   echo -e "${red}error:${nocolor} todo update N [OPTIONS]"
-   exit 1
- fi
+function todo_show_help() {
+cat << EOF
+Usage:  todo show [OPTIONS]
 
- line=$(awk "NR==$lineno {print}" ${todo_file})
- IFS=$TFS read -r now priority due estimate status message <<< $line
+List the entries for the currently selected todo file
 
- while [[ ! -z $1 ]]; do
-    opt=$1
-	arg=$2
-    case ${opt} in
-	    -e|--estimate)
-	      shift 2
-		  estimate=$argtos
-		  ;;
-	    -d|--due)
-	      shift 2
-	      due=$arg
-		  ;;
-	    -m|--message)
-	      shift 2
-	      message=$arg
-	  	  ;;
-	    -p|--priority)
-	      shift 2
-	      priority=$arg
-	  	  ;;
-	     *) todo_add_help; exit 1;;
-  	  esac
-    done
-  new_line="$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message"
-  echo ${new_line}
-  sed -i "${lineno}s/.*/${new_line}/" "${todo_file}"
+OPTIONS
+  -v          Enable verbose output
+
+EOF
 }
 
-function todo_add() {
-  due="n/a"
-  estimate="n/a"
-  priority="normal"
-  message=" "
-  status=${mark_unstarted}
+##
+# General purpose utility functions
+#
 
+function build_entry() {
+	echo "$now$TFS$priority$TFS$due$TFS$updated$TFS$estimate$TFS$status$TFS$message"
+}
+
+function todo_add_args() {
   while [[ ! -z $1 ]]; do
     opt=$1
 	arg=$2
@@ -147,6 +124,20 @@ function todo_add() {
 	   *) todo_add_help; exit 1;;
 	esac
   done
+}
+
+function todo_add() {
+  # Default values
+  # TODO: prefer empty values
+  due="n/a"
+  estimate="n/a"
+  priority="normal"
+  message=" "
+  status=${mark_unstarted}
+  updated=$now
+
+  # collect arguments
+  todo_add_args "$@"
 
   # Normalize due date and test
   if [[ "${due}" == "n/a" ]]; then
@@ -159,11 +150,10 @@ function todo_add() {
     fi
   fi
 
-  # Normalize priority statement
-
   # Test validity of message and store
   if [[ ${message} != " " ]]; then
-    echo "$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message" >> "${todo_file}"
+    new_line=$(build_entry)
+    echo "$new_line" >> "${todo_file}"
 	if [[ $? -eq 0 ]]; then
 	  echo -e "${GREEN}Info:${NOCOL} wrote to ${YELLOW}${switch}${NOCOLOR}"
 	  todo_show | tail -n 1
@@ -171,20 +161,41 @@ function todo_add() {
   fi
 }
 
-function todo_show() {
-  local verbose=0
-  local lineno=""
+function todo_update() {
+ lineno=$1
+ shift 1
+ 
+ if [[ ! "$lineno" =~ ^-?[0-9]+$ ]]; then
+   echo -e "${red}error:${nocolor} todo update N [OPTIONS]"
+   exit 1
+ fi
+
+  line=$(awk "NR==$lineno {print}" ${todo_file})
+  updated=$now
+  IFS=$TFS read -r now priority due updated_ estimate status message <<< $line
+
+  # Collect new arguments
+  todo_add_args "$@"
+
+  new_line=$(build_entry)
+  echo ${new_line}
+  sed -i "${lineno}s?.*?${new_line}?" "${todo_file}"
+}
+
+function todo_show_args() {
+  # collect todo_show options
   while [[ ! -z $1 ]]; do
     opt=$1
 	arg=$2
 
     case ${opt} in
-	  #+([0-9])) line=$1; shift 1; verbose=1; echo $line;; # maybe with shopt -s extglob
 	  -v|--verbose) shift 1; verbose=1;;
 	  *)  
         # Check if the input is a valid integer
         if [[ "$1" =~ ^-?[0-9]+$ ]]; then
-          lineno="NR==$1"
+		  echo "line number unsupported at this time"
+		  exit 1
+          lineno="$1"
 		  verbose=1
 		  shift 1
         else	  
@@ -193,43 +204,47 @@ function todo_show() {
 		fi;;
 	esac
   done
-
-  echo -e "${YELLOW}File:${NOCOLOR} $switch"
-  if [ $verbose -eq 1 ]; then
-    fmt='$5 == "[ ]" {print NR ":", $5 " " $6 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }
-	     $5 == "[✓]" {print "\033[38;5;0m" NR ":", $5 " " $6 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 "\033[0m" }'
-  else
-    fmt='$5 == "[ ]"  {print NR ":", $5 " " $6}
-	     $5 == "[✓]" {print "\033[38;5;0m" NR ":", $5 " " $6 "\033[0m"}'
-  fi
-  
-  fmt="$lineno $fmt"
-  awk -F"$TFS" "$fmt" ${todo_file}
 }
 
-# todo_update_mark
-# Update the status of the entry in place
-function todo_update_mark {
+function todo_show() {
+  local verbose=0
+  local lineno=""
+
+  # collect the options
+  todo_show_args "$@"
+
+  # display the contents
+  echo -e "${YELLOW}File:${NOCOLOR} $switch"
+  exec 3< ${todo_file}
+  lineno=1
+  while IFS=$TFS read -r created priority due updated estimate status message <&3 
+  do
+	echo "${lineno}: ${status} ${message}"
+	[[ ${verbose} == 1 ]] && echo "  created: ${created}"
+	[[ ${verbose} == 1 ]] && echo "  updated: ${updated}"
+	[[ ${verbose} == 1 ]] && echo "      due: ${due}"
+	[[ ${verbose} == 1 ]] && echo " priority: ${priority}"
+	lineno=$((lineno+1))
+  done
+  exec 3<&-
+}
+
+# todo_update_status
+# implements "todo mark" and "todo unmark"
+function todo_update_status {
 	lineno=$1
 
-	# update lineno with status mark
+	# update line lineno with status mark
 	line=$(sed "${lineno}q;d" ${todo_file})
-	IFS="$TFS" read -a parts <<< $line
-	parts[4]="$status_mark"
-
-	# build replacement result
-	result=""
-    for p in "${parts[@]}"; do
-      if [ -z "$result" ]; then
-        result="$p"
-      else
-        result="$result$TFS$p"
-      fi
-	done
+	updated=$now
+	IFS=$TFS read -r now priority due updated_ estimate status message <<< $line
+	status="${status_mark}"
+    result=$(build_entry)
     
+	# replace the line in the todo_file
 	# This sed expression has had trouble, using '!' for separator for now
 	sed -i "${lineno}s!.*!${result}!" "${todo_file}"
-	todo_show | grep "${lineno}:"
+	todo_show | grep "^${lineno}:"
 }
 
 # todo_switch
@@ -238,11 +253,10 @@ function todo_update_mark {
 function todo_switch() {
 	if [ -z $1 ]; then
 	  for f in "$todo_dir"/*; do
+		f=$(basename $f)
 	    completed=$(grep -e "${mark_completed}" $f | wc -l | awk '{print $1}')
 		unstarted=$(grep -e "${mark_unstarted}" $f | wc -l | awk '{print $1}')
-	    #entries=$(wc -l $f | awk '{print $1}')
-		entries="[${completed}/${unstarted}]"
-		f=$(basename $f)
+    	entries="[${completed}/${unstarted}]"
 		echo "$f $entries"
 	  done
 	else
@@ -265,7 +279,6 @@ function todo_remove() {
 
 # "main" routine - branch on primary command argument
 function todo() {
-
 	# Check to see if $todo_file exists and create an empty one if not
 	[[ -f "${todo_file}" ]] || cat /dev/null > "${todo_file}"
 
@@ -279,18 +292,28 @@ function todo() {
 		remove) shift; todo_remove $@;;
 		   add) shift; todo_add "$@";;
 		update) shift; todo_update "$@";;
-          mark) shift; status_mark=${mark_completed}; todo_update_mark $@;;
-        unmark) shift; status_mark=${mark_unstarted}; todo_update_mark $@;;
+          mark) shift; status_mark=${mark_completed}; todo_update_status $@;;
+        unmark) shift; status_mark=${mark_unstarted}; todo_update_status $@;;
 		switch) shift; todo_switch $@;;	
 		  show) shift; todo_show $@;;
 		     *) todo_help;;
 	esac
 }
 
+
+commands="add show update mark unmark remove"
+_todo_compgen() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"  # Current word being completed
+    #cur="todo"
+	COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+}
+
+
+
 # Entry point -- provide autocomplete when sourced or enter "main"
 $(return >/dev/null 2>&1) # TODO: DANGER! This is not stable
 if [ "$?" -eq "0" ]; then
-	complete -W 'add help remove update mark unmark clean' todo
+	complete -F _todo_compgen todo
 else
 	todo "$@" # Call the todo function
 fi

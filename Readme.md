@@ -23,9 +23,21 @@ Options:
 
 ```
 -m MESSAGE     (required) the text of the todo item
+-e ESTIMATE    estimate to complete
 -p PRIORITY    priority 1-9
 -d DUE_DATE    due date for this item
 ```
+
+### Command: update
+
+Update fields of a todo list item.
+
+Options:
+
+```
+[identical to add]
+```
+
 
 ### Command: show
 
