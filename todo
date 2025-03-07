@@ -2,9 +2,16 @@
 # This file can be sourced or executed.
 # More information below at the "Execution" section
 
+##
+# FILE FORMAT
+#
+#   TFS=|
+#   TIME_NOW | PRIORITY | DUE_DATE | ESTIMATED_TIME | CURRENT_STATUS | MESSAGE
+#   1          2          3          4                5                6
+
 source ~/.bashrc.colors
 
-# Configurable default values
+# Configurable values
 TFS='|'                 # TODO Field Separator
 mark_completed='[✓]'    # Completed elements
 mark_unstarted='[ ]'    # Open elements
@@ -19,7 +26,8 @@ if [[ ${switch} == ${config_name} ]]; then
   echo -e "${RED}error:${NOCOLOR} invalid todo list name detected. Check ${todo_config}"
   exit 1
 fi
-conf=$todo_dir/$switch
+todo_file=$todo_dir/$switch
+now=$(date ${date_fmt})
 
 # Todo Function
 function todo_help() {
@@ -68,13 +76,52 @@ OPTIONS
 EOF
 }
 
+function todo_update() {
+ lineno=$1
+ shift 1
+ 
+ if [[ ! "$lineno" =~ ^-?[0-9]+$ ]]; then
+   echo -e "${red}error:${nocolor} todo update N [OPTIONS]"
+   exit 1
+ fi
+
+ line=$(awk "NR==$lineno {print}" ${todo_file})
+ IFS=$TFS read -r now priority due estimate status message <<< $line
+
+ while [[ ! -z $1 ]]; do
+    opt=$1
+	arg=$2
+    case ${opt} in
+	    -e|--estimate)
+	      shift 2
+		  estimate=$argtos
+		  ;;
+	    -d|--due)
+	      shift 2
+	      due=$arg
+		  ;;
+	    -m|--message)
+	      shift 2
+	      message=$arg
+	  	  ;;
+	    -p|--priority)
+	      shift 2
+	      priority=$arg
+	  	  ;;
+	     *) todo_add_help; exit 1;;
+  	  esac
+    done
+  new_line="$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message"
+  echo ${new_line}
+  sed -i "${lineno}s/.*/${new_line}/" "${todo_file}"
+}
+
 function todo_add() {
   due="n/a"
   estimate="n/a"
   priority="normal"
   message=" "
   status=${mark_unstarted}
-  now=$(date ${date_fmt})
 
   while [[ ! -z $1 ]]; do
     opt=$1
@@ -83,7 +130,7 @@ function todo_add() {
     case ${opt} in
 	  -e|--estimate)
 	    shift 2
-		estimate=$arg
+		estimate=$argtos
 		;;
 	  -d|--due)
 	    shift 2
@@ -116,7 +163,7 @@ function todo_add() {
 
   # Test validity of message and store
   if [[ ${message} != " " ]]; then
-    echo "$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message" >> "${conf}"
+    echo "$now$TFS$priority$TFS$due$TFS$estimate$TFS$status$TFS$message" >> "${todo_file}"
 	if [[ $? -eq 0 ]]; then
 	  echo -e "${GREEN}Info:${NOCOL} wrote to ${YELLOW}${switch}${NOCOLOR}"
 	  todo_show | tail -n 1
@@ -147,18 +194,17 @@ function todo_show() {
 	esac
   done
 
-
   echo -e "${YELLOW}File:${NOCOLOR} $switch"
   if [ $verbose -eq 1 ]; then
-    fmt='$5 == "[ ]" {print NR ":", $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }
-	     $5 == "[✓]" {print NR ":", "\033[38;5;0m" $4 " " $5 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 "\033[0m" }'
+    fmt='$5 == "[ ]" {print NR ":", $5 " " $6 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 }
+	     $5 == "[✓]" {print "\033[38;5;0m" NR ":", $5 " " $6 "\n  created: " $1 "\n  due: " $3 "\n  priority: " $2 "\033[0m" }'
   else
-    fmt='$5 == "[ ]"  {print NR ":", $4 " " $5}
-	     $5 == "[✓]" {print NR ":", "\033[38;5;0m" $4 " " $5 "\033[0m"}'
+    fmt='$5 == "[ ]"  {print NR ":", $5 " " $6}
+	     $5 == "[✓]" {print "\033[38;5;0m" NR ":", $5 " " $6 "\033[0m"}'
   fi
   
   fmt="$lineno $fmt"
-  awk -F"$TFS" "$fmt" ${conf}
+  awk -F"$TFS" "$fmt" ${todo_file}
 }
 
 # todo_update_mark
@@ -167,9 +213,9 @@ function todo_update_mark {
 	lineno=$1
 
 	# update lineno with status mark
-	line=$(sed "${lineno}q;d" ${conf})
+	line=$(sed "${lineno}q;d" ${todo_file})
 	IFS="$TFS" read -a parts <<< $line
-	parts[4]=$status_mark
+	parts[4]="$status_mark"
 
 	# build replacement result
 	result=""
@@ -182,7 +228,7 @@ function todo_update_mark {
 	done
     
 	# This sed expression has had trouble, using '!' for separator for now
-	sed -i "${lineno}s!.*!${result}!" "${conf}"
+	sed -i "${lineno}s!.*!${result}!" "${todo_file}"
 	todo_show | grep "${lineno}:"
 }
 
@@ -208,9 +254,9 @@ function todo_switch() {
 # todo_remove
 # Remove an entry from currently configured todo list
 function todo_remove() {
-	num_lines=$(wc -l ${conf} | awk '{print $1}')
+	num_lines=$(wc -l ${todo_file} | awk '{print $1}')
 	if (( $1 > 0 && $1 <= num_lines )); then
-	  sed -i -e "${1}d" "${conf}"
+	  sed -i -e "${1}d" "${todo_file}"
 	else
 	  echo -e "${RED}error:${NOCOLOR} index out of bounds"
 	  exit 1
@@ -220,18 +266,19 @@ function todo_remove() {
 # "main" routine - branch on primary command argument
 function todo() {
 
-	# Check to see if $conf exists and create an empty one if not
-	[[ -f "${conf}" ]] || cat /dev/null > "${conf}"
+	# Check to see if $todo_file exists and create an empty one if not
+	[[ -f "${todo_file}" ]] || cat /dev/null > "${todo_file}"
 
 	# Remove whitespace from the ends of lines and empty lines
-	sed -i '/^\s*$/d' "${conf}"
-	sed -i '/^$/d' "${conf}"
+	sed -i '/^\s*$/d' "${todo_file}"
+	sed -i '/^$/d' "${todo_file}"
 
     # Parse the arguments
     case $1 in
 		help|--help) todo_help;;
 		remove) shift; todo_remove $@;;
 		   add) shift; todo_add "$@";;
+		update) shift; todo_update "$@";;
           mark) shift; status_mark=${mark_completed}; todo_update_mark $@;;
         unmark) shift; status_mark=${mark_unstarted}; todo_update_mark $@;;
 		switch) shift; todo_switch $@;;	
